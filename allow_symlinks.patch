@@ -1,0 +1,88 @@
+diff --git a/includes/stream_wrappers.inc b/includes/stream_wrappers.inc
+index 3050739..15fd0f7 100644
+--- a/includes/stream_wrappers.inc
++++ b/includes/stream_wrappers.inc
+@@ -373,17 +373,29 @@ abstract class DrupalLocalStreamWrapper implements DrupalStreamWrapperInterface
+     if (!isset($uri)) {
+       $uri = $this->uri;
+     }
+-    $path = $this->getDirectoryPath() . '/' . $this->getTarget($uri);
+-    $realpath = realpath($path);
+-    if (!$realpath) {
+-      // This file does not yet exist.
+-      $realpath = realpath(dirname($path)) . '/' . drupal_basename($path);
+-    }
+-    $directory = realpath($this->getDirectoryPath());
+-    if (!$realpath || !$directory || strpos($realpath, $directory) !== 0) {
++    // Get the target path relative to the files repository.
++    $target = DIRECTORY_SEPARATOR . $this->getTarget($uri);
++    // Get the files repository directory.
++    $repository = realpath($this->getDirectoryPath());
++    // Get the target directory.
++    $target_dir = realpath(dirname($repository . $target)) . DIRECTORY_SEPARATOR;
++    // Get the target name, without any directory components.
++    $target_name = drupal_basename($repository . $target);
++    // A directory component can point outside its parent directory if the path
++    // separator ('/' or '\') is followed by '..' to reference the parent
++    // directory.
++    $pattern = '@(/|\\\\)\.\.@';
++    // Check whether the target can possibly point outside its parent.
++    $traversal = preg_match($pattern, $target);
++    // Check whether the target dir exists within the files repository.
++    $subdirectory = strpos($target_dir, $repository . DIRECTORY_SEPARATOR) === 0;
++    if ($traversal && !$subdirectory) {
++      // If the target path contains directory-traversal parts such as '/..' and
++      // does not resolve to a subdirectory of the repository, then return FALSE
++      // to avoid a possible exploit.
+       return FALSE;
+     }
+-    return $realpath;
++    return $target_dir . $target_name;
+   }
+ 
+   /**
+diff --git a/modules/simpletest/tests/file.test b/modules/simpletest/tests/file.test
+index 0f2cdb6..56232a1 100644
+--- a/modules/simpletest/tests/file.test
++++ b/modules/simpletest/tests/file.test
+@@ -2779,4 +2779,40 @@ class StreamWrapperTest extends DrupalWebTestCase {
+     $this->assertTrue(file_stream_wrapper_valid_scheme(file_uri_scheme('public://asdf')), 'Got a valid stream scheme from public://asdf');
+     $this->assertFalse(file_stream_wrapper_valid_scheme(file_uri_scheme('foo://asdf')), 'Did not get a valid stream scheme from foo://asdf');
+   }
++
++  /**
++   * Tests that symlinks are supported within the files directory.
++   */
++  function testFileDirectorySymlinks() {
++    // Temporarily unset the file_temporary_path variable.
++    $file_temporary_path = variable_get('file_temporary_path', NULL);
++    variable_del('file_temporary_path');
++    // Now the return value of file_directory_temp() should be outside
++    // the public files directory.
++    $temp = file_directory_temp();
++    // Restore the file_temporary_path variable.
++    variable_set('file_temporary_path', $file_temporary_path);
++    $public = drupal_realpath('public://');
++    $dirname = $this->randomname(20);
++    $filename = $this->randomname(20);
++    // Create a randomly-named directory in the temp folder.
++    $temp_dir = drupal_realpath($temp) . DIRECTORY_SEPARATOR . $dirname;
++    drupal_mkdir($temp_dir);
++    // Create a symlink in the public files folder pointing to the
++    // newly-created directory.
++    $symlink = $public . DIRECTORY_SEPARATOR . $dirname;
++    symlink($temp_dir, $symlink);
++    // Copy a test file to the symlinked directory.
++    $source = current($this->drupalGetTestFiles('text'))->uri;
++    $destination = "public://$dirname/$filename";
++    file_unmanaged_copy($source, $destination, FILE_EXISTS_ERROR);
++    // Test that the real path of the copied file lies in the temp folder.
++    $realpath = drupal_realpath($destination);
++    $compare = $temp_dir . DIRECTORY_SEPARATOR . $filename;
++    $this->assertEqual($realpath, $compare, "drupal_realpath('$destination') returned '$realpath'; expected '$compare'");
++    // Clean up the mess.
++    file_unmanaged_delete($destination);
++    drupal_unlink($symlink);
++    drupal_rmdir($temp_dir);
++  }
+ }
