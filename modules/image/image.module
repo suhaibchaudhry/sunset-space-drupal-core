@@ -863,7 +863,7 @@ function image_style_deliver($style, $scheme) {
   // Try to generate the image, unless another thread just did it while we were
   // acquiring the lock.
   $success = file_exists($derivative_uri) || image_style_create_derivative($style, $image_uri, $derivative_uri);
-//print $derivative_uri;
+
   if (!empty($lock_acquired)) {
     lock_release($lock_name);
   }
